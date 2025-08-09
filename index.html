@@ -4,7 +4,44 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>魔塔の覇者</title>
-  <link rel="stylesheet" href="style.css" />
+  <style>
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; background:#0c0f14; color:#e8ecf1; font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif; }
+#game-root { display:flex; align-items:center; justify-content:center; height:100%; position:relative; }
+
+canvas#game { width:min(96vw, 1024px); height:auto; image-rendering: pixelated; background:#111318; border:1px solid #2a2f39; border-radius:8px; }
+
+#hud { position:absolute; top:8px; left:50%; transform:translateX(-50%); width:calc(min(96vw, 1024px) - 24px); display:flex; justify-content:space-between; gap:8px; padding:6px 10px; background:rgba(9,12,17,.65); backdrop-filter: blur(4px); border:1px solid #1f2530; border-radius:8px; font-size:14px; }
+#hud span { margin-right:10px; opacity:.95; }
+
+#dialog { position:absolute; bottom:16px; left:50%; transform:translateX(-50%); width:calc(min(96vw, 1024px) - 24px); min-height:92px; padding:12px 14px; background:rgba(9,12,17,.85); border:1px solid #2a2f39; border-radius:8px; display:flex; flex-direction:column; gap:10px; }
+#dialog.hidden { display:none; }
+#dialog-text { white-space:pre-wrap; line-height:1.5; }
+#dialog-next { align-self:flex-end; min-width:52px; height:40px; }
+
+.btn { background:#2b6cb0; border:0; color:#fff; padding:8px 12px; border-radius:6px; cursor:pointer; }
+.btn:active { transform: translateY(1px); }
+
+.touch-only { position:absolute; right:10px; bottom:10px; display:none; gap:8px; }
+.dpad { width:56px; height:56px; background:#1b212c; border:1px solid #2a2f39; border-radius:8px; color:#e8ecf1; }
+.dpad:active, .act:active { transform: translateY(1px); }
+.row { display:flex; gap:8px; }
+
+@media (max-width: 900px) {
+  .touch-only { display:flex; flex-direction:column; }
+}
+
+#coords { opacity:.6; }
+
+/* 選択肢 */
+.choices { display:flex; gap:8px; flex-wrap:wrap; }
+.choices.hidden { display:none; }
+.choices .choice {
+  background:#263044; border:1px solid #2f3a50; color:#e8ecf1;
+  padding:6px 10px; border-radius:6px; cursor:pointer;
+}
+.choices .choice:active { transform: translateY(1px); }
+  </style>
 </head>
 <body>
   <main id="game-root">
@@ -31,16 +68,783 @@
 
     <!-- タッチ操作（モバイル） -->
     <section id="touchpad" class="touch-only">
-      <button data-dir="up" class="dpad up" aria-label="上"></button>
+      <button data-dir="up" class="dpad up" aria-label="上">↑</button>
       <div class="row">
-        <button data-dir="left" class="dpad left" aria-label="左"></button>
+        <button data-dir="left" class="dpad left" aria-label="左">←</button>
         <button id="btn-act" class="btn act" aria-label="調べる/話す">A</button>
-        <button data-dir="right" class="dpad right" aria-label="右"></button>
+        <button data-dir="right" class="dpad right" aria-label="右">→</button>
       </div>
-      <button data-dir="down" class="dpad down" aria-label="下"></button>
+      <button data-dir="down" class="dpad down" aria-label="下">↓</button>
     </section>
   </main>
 
-  <script type="module" src="script.js"></script>
+  <script>
+/* =========================
+   魔塔の覇者 - 完全版（軽量）
+   - 7階構成の探索
+   - 戦闘（攻撃/ガード/スキル）
+   - 各階ギミック：風/氷/炎/幻影/ステルス/崩落
+   - 竜ボス＋願いエンディング
+   ========================= */
+
+   const $ = (sel) => document.querySelector(sel);
+   const canvas = $("#game");
+   const ctx = canvas.getContext("2d");
+   
+   const HUD = {
+     floor: $("#floor-label"),
+     coords: $("#coords"),
+     hp: $("#hp"),
+     sp: $("#sp"),
+   };
+   
+   /* ========== Dialog with choices ========== */
+   const Dialog = (() => {
+     const box = $("#dialog");
+     const text = $("#dialog-text");
+     const next = $("#dialog-next");
+     const choicesBox = $("#dialog-choices");
+     let queue = [];
+     let resolver = null;
+     let chooseResolver = null;
+   
+     function clearChoices() {
+       choicesBox.innerHTML = "";
+       choicesBox.classList.add("hidden");
+     }
+   
+     next.addEventListener("click", () => {
+       if (chooseResolver) return; // 選択待ち中は無効
+       if (queue.length > 0) {
+         text.textContent = queue.shift();
+         if (queue.length === 0) next.textContent = "OK";
+       } else {
+         box.classList.add("hidden");
+         if (resolver) { resolver(); resolver = null; }
+       }
+     });
+   
+     return {
+       async show(lines) {
+         clearChoices();
+         queue = Array.isArray(lines) ? [...lines] : [String(lines)];
+         text.textContent = queue.shift();
+         next.textContent = queue.length ? "▶" : "OK";
+         box.classList.remove("hidden");
+         return new Promise((res) => (resolver = res));
+       },
+       async choose(promptText, labels) {
+         queue = [];
+         text.textContent = promptText;
+         next.textContent = "…";
+         choicesBox.classList.remove("hidden");
+         choicesBox.innerHTML = "";
+         return new Promise((res) => {
+           chooseResolver = res;
+           labels.forEach((lab, i) => {
+             const b = document.createElement("button");
+             b.className = "choice";
+             b.textContent = lab;
+             b.addEventListener("click", () => {
+               clearChoices();
+               chooseResolver(i);
+               chooseResolver = null;
+               this.hide();
+             });
+             choicesBox.appendChild(b);
+           });
+         });
+       },
+       hide(){ $("#dialog").classList.add("hidden"); }
+     };
+   })();
+   
+   /* ========= Input ========= */
+   const Input = { up:false, down:false, left:false, right:false, act:false };
+   const KEYS = { ArrowUp:"up", ArrowDown:"down", ArrowLeft:"left", ArrowRight:"right", KeyZ:"act", Space:"act", Enter:"act" };
+   
+   document.addEventListener("keydown", (e)=>{ 
+     const k = KEYS[e.code]; 
+     if (k){ 
+       Input[k]=true; 
+       e.preventDefault(); 
+     }
+   });
+   
+   document.addEventListener("keyup", (e)=>{ 
+     const k = KEYS[e.code]; 
+     if (k){ 
+       Input[k]=false; 
+       e.preventDefault(); 
+     }
+   });
+   
+   // touch
+   const touchpad = $("#touchpad");
+   if (touchpad) {
+     touchpad.addEventListener("click", (e)=>{
+       const dir = e.target.dataset.dir;
+       if (dir) { 
+         Input[dir]=true; 
+         setTimeout(()=> Input[dir]=false, 80); 
+       }
+     });
+   }
+   
+   const btnAct = $("#btn-act");
+   if (btnAct) {
+     btnAct.addEventListener("click", ()=>{
+       Input.act=true; 
+       setTimeout(()=> Input.act=false, 120);
+     });
+   }
+   
+   /* ========= Helpers ========= */
+   const clamp = (v, min, max)=> Math.max(min, Math.min(max, v));
+   function clearScreen(color){ ctx.fillStyle=color; ctx.fillRect(0,0,canvas.width, canvas.height); }
+   const TILE_SIZE=16, SCALE=2;
+   const VIEW_W = canvas.width / (TILE_SIZE * SCALE);
+   const VIEW_H = canvas.height / (TILE_SIZE * SCALE);
+   
+   /* ========= Tiles / Colors ========= */
+   const TILE = { FLOOR:0, WALL:1, STAIR_UP:2, STAIR_DOWN:3, EVENT:4, FIRE:5, HOLE:6, SWITCH:7 };
+   const COLORS = {
+     [TILE.FLOOR]:"#1a1f2a",
+     [TILE.WALL] :"#202633",
+     [TILE.STAIR_UP]  :"#2b6cb0",
+     [TILE.STAIR_DOWN]:"#805ad5",
+     [TILE.EVENT]:"#c3da2b",
+     [TILE.FIRE] :"#b94b3a",
+     [TILE.HOLE] :"#0b0e14",
+     [TILE.SWITCH]:"#e3aa34",
+   };
+   function drawTile(vx, vy, color){
+     const px = Math.floor(vx*TILE_SIZE*SCALE);
+     const py = Math.floor(vy*TILE_SIZE*SCALE);
+     ctx.fillStyle = color;
+     ctx.fillRect(px, py, TILE_SIZE*SCALE, TILE_SIZE*SCALE);
+   }
+   function drawRect(x,y,w,h,color){ ctx.fillStyle=color; ctx.fillRect(x,y,w,h); }
+   function drawTextCentered(txt, x, y, size=16){
+     ctx.fillStyle="#e8ecf1"; ctx.font=`${size}px system-ui, 'Noto Sans JP', sans-serif`;
+     ctx.textAlign="center"; ctx.textBaseline="middle"; ctx.fillText(txt, x, y);
+   }
+   
+   /* ========= Map generation ========= */
+   function gridBox(w,h, opts={}){
+     const g = Array.from({length:h}, (_,y)=> Array.from({length:w},(_,x)=> (x===0||y===0||x===w-1||y===h-1) ? TILE.WALL : TILE.FLOOR));
+     const put = (x,y,id)=>{ if (y>=0 && y<h && x>=0 && x<w) g[y][x]=id; };
+     if (opts.stairUp)   put(opts.stairUp[0],   opts.stairUp[1],   TILE.STAIR_UP);
+     if (opts.stairDown) put(opts.stairDown[0], opts.stairDown[1], TILE.STAIR_DOWN);
+     (opts.events||[]).forEach(([x,y])=> put(x,y,TILE.EVENT));
+     (opts.fires ||[]).forEach(([x,y])=> put(x,y,TILE.FIRE));
+     (opts.switches||[]).forEach(([x,y])=> put(x,y,TILE.SWITCH));
+     return g;
+   }
+   
+   /* 7階ベースマップ */
+   const BASE_MAPS = [
+     /* 1F 試練の庭園 */ gridBox(24, 13, { stairUp:[22,11], events:[[4,4],[8,8]] }),
+     /* 2F 風の回廊   */ gridBox(26, 14, { stairUp:[23,11], stairDown:[2,2], events:[[13,7]], switches:[[6,7],[19,7]] }),
+     /* 3F 氷結の間   */ gridBox(28, 15, { stairUp:[25,12], stairDown:[2,2], events:[[7,7],[20,8]] }),
+     /* 4F 炎の大広間 */ gridBox(28, 15, { stairUp:[25,12], stairDown:[2,2], fires:[[10,6],[11,6],[12,6],[16,8],[17,8]], events:[[14,5]] }),
+     /* 5F 幻影の回廊 */ gridBox(30, 16, { stairUp:[27,13], stairDown:[2,2], events:[[9,4],[20,10]] }),
+     /* 6F 王の間     */ gridBox(30, 16, { stairUp:[27,13], stairDown:[2,2], events:[[15,8]] }),
+     /* 7F 竜の天守   */ gridBox(32, 17, { stairDown:[2,2], events:[[16,8]] }),
+   ];
+   
+   /* ========= Player ========= */
+   class Player {
+     constructor(map){
+       this.map = map;
+       this.x = 2; this.y = 2;
+       this.moveCooldown = 0;
+       this.hpMax = 28; this.hp = 28;
+       this.sp = 6;
+       this.flags = { fireWard:false, reveal:false }; // 幻影可視/耐火
+     }
+     update(dt){
+       this.moveCooldown -= dt;
+       let dx=0, dy=0;
+       if (this.moveCooldown<=0) {
+         if (Input.up)    dy=-1;
+         else if (Input.down) dy=1;
+         else if (Input.left) dx=-1;
+         else if (Input.right) dx=1;
+   
+         // 氷滑り（3F）
+         if (this.map.level===2 && (dx||dy)) {
+           this.slide(dx, dy);
+         } else if (dx||dy){
+           const nx = clamp(this.x+dx, 0, this.map.w-1);
+           const ny = clamp(this.y+dy, 0, this.map.h-1);
+           if (!this.map.isBlocked(nx,ny)){
+             this.x=nx; this.y=ny;
+             this.moveCooldown = 110;
+           }
+         }
+   
+         if (Input.act){
+           this.interact();
+           this.moveCooldown = 160;
+         }
+       }
+   
+       // 風押し（2F）
+       if (this.map.level===1) this.map.applyWind(this);
+   
+       // 炎ダメージ（4F タイミング）
+       if (this.map.level===3) this.map.applyFireTick(this);
+   
+       // ステルス検知（6F）
+       if (this.map.level===5) this.map.checkGuards(this);
+       
+       // 崩落床（7F）
+       if (this.map.level===6) this.map.fallCheck(this);
+     }
+     slide(dx,dy){
+       let nx=this.x, ny=this.y;
+       for(;;){
+         const tx = clamp(nx+dx, 0, this.map.w-1);
+         const ty = clamp(ny+dy, 0, this.map.h-1);
+         if (this.map.isBlocked(tx,ty)) break;
+         nx=tx; ny=ty;
+         if (Math.abs(nx-this.x)+Math.abs(ny-this.y) > 6) break;
+       }
+       if (nx!==this.x || ny!==this.y){
+         this.x=nx; this.y=ny; this.moveCooldown=140;
+       }
+     }
+     tile(){ return this.map.get(this.x, this.y); }
+     async interact(){
+       const t = this.tile();
+       if (t === TILE.EVENT){
+         await this.map.handleEvent(this);
+       } else if (t === TILE.SWITCH){
+         await Dialog.show("……風向きを切り替えた。");
+         this.map.toggleWind();
+       } else if (t === TILE.STAIR_UP){
+         await Dialog.show(["上への階段だ。"]);
+         this.map.requestFloorChange(1);
+       } else if (t === TILE.STAIR_DOWN){
+         await Dialog.show(["下への階段だ。"]);
+         this.map.requestFloorChange(-1);
+       } else if (t === TILE.FIRE){
+         await Dialog.show("……熱い。今は渡れない。");
+       } else if (t === TILE.HOLE){
+         await Dialog.show("……底が見えない穴。落ちる。");
+       } else {
+         await Dialog.show("……特にない。");
+       }
+     }
+   }
+   
+   /* ========= Map Wrapper + per-floor logic ========= */
+   class MapData {
+     constructor(levelIndex){
+       this.level = levelIndex; // 0..6
+       this.grid = BASE_MAPS[levelIndex].map(row=> [...row]);
+       this.h = this.grid.length;
+       this.w = this.grid[0].length;
+       this.floorDelta = 0;
+       this.game = null;
+       // 風（2F）
+       this.windDir = 1; // 1:right, -1:left
+       this.windCols = [8,9,10,11,12,13,14,15,16,17];
+       // 炎（4F）
+       this.fireTimer=0;
+       // ステルス（6F）
+       this.guards = (levelIndex===5)? [{x:10,y:6,dir:1},{x:18,y:10,dir:-1}] : [];
+       // 崩落（7F）
+       this.fallSet = new Set(); // "x,y" visited -> becomes HOLE after離れる
+     }
+     get(x,y){ return this.grid[y]?.[x] ?? TILE.WALL; }
+     set(x,y,id){ if (this.grid[y] && this.grid[y][x]!==undefined) this.grid[y][x]=id; }
+     isWall(x,y){ return this.get(x,y) === TILE.WALL; }
+     isBlocked(x,y){
+       const t = this.get(x,y);
+       if (t===TILE.WALL || t===TILE.HOLE) return true;
+       // 5F 幻影：壁が隠れて見えない → 可視化されていなければ壁扱い
+       if (this.level===4 && !this.revealed && this.hiddenWallAt && this.hiddenWallAt(x,y)) return true;
+       return false;
+     }
+     requestFloorChange(d){ this.floorDelta = d; }
+     consumeFloorChange(){ const d = this.floorDelta; this.floorDelta=0; return d; }
+   
+     /* ---- Floor interactions ---- */
+     async handleEvent(player){
+       const lv = this.level;
+       if (lv===0){
+         await Dialog.show(["……ようこそ。","石碑：『一歩ごとに学べ』"]);
+         return this.randomBattle(player, ["slime","bat"]);
+       }
+       if (lv===1){
+         await Dialog.show(["風の回廊。","……レバーで風向きを変えられる。"]);
+         return this.randomBattle(player, ["bat","knight"]);
+       }
+       if (lv===2){
+         await Dialog.show(["氷が軋む音。","……滑る。止まる位置を読んで。"]);
+         return this.randomBattle(player, ["slime","knight"]);
+       }
+       if (lv===3){
+         const pick = await Dialog.choose("火は周期で弱まる。進む？", ["今だ（突っ切る）","様子を見る"]);
+         if (pick===0){
+           if (!player.flags.fireWard && Math.random()<0.5){
+             const dmg = 3; player.hp = Math.max(1, player.hp-dmg);
+             await Dialog.show(`……熱傷。${dmg} ダメージ。`);
+           } else {
+             await Dialog.show("……うまく抜けた。");
+           }
+         } else {
+           await Dialog.show("……タイミングを計る。");
+         }
+         return this.randomBattle(player, ["knight","bat"]);
+       }
+       if (lv===4){
+         if (!this.revealed){
+           await Dialog.show(["幻影の回廊。","光を当てれば、道は見える。"]);
+           const pick = await Dialog.choose("光珠を掲げる？", ["掲げる","やめる"]);
+           if (pick===0){ this.revealed=true; player.flags.reveal=true; await Dialog.show("……道が浮かび上がった。"); }
+         } else {
+           await Dialog.show("……光は充分。");
+         }
+         return this.randomBattle(player, ["bat","knight"]);
+       }
+       if (lv===5){
+         await Dialog.show(["王の間。","見張りに見つかるな。"]);
+         return; // 戦闘なし（警備）
+       }
+       if (lv===6){
+         await Dialog.show(["……最上階。","竜の気配。"]);
+         this.game.change(new DragonScene(this.game, player, this.level, {x:player.x,y:player.y}));
+       }
+     }
+   
+     async randomBattle(player, pool){
+       if (Math.random()<0.6){
+         const enemy = pool[Math.floor(Math.random()*pool.length)];
+         await Dialog.show(`${ENEMIES[enemy].name} が襲いかかってきた！`);
+         this.game.change(new BattleScene(this.game, player, enemy, this.level, {x:player.x,y:player.y}));
+       } else {
+         await Dialog.show("……気配は去った。");
+       }
+     }
+   
+     /* 2F: wind */
+     applyWind(player){
+       if (!this.windCols.includes(player.x)) return;
+       const dir = this.windDir; // ±1
+       const nx = clamp(player.x + dir, 0, this.w-1);
+       if (!this.isBlocked(nx, player.y)){
+         player.x = nx;
+       }
+     }
+     toggleWind(){ this.windDir *= -1; }
+   
+     /* 4F: fire timing */
+     applyFireTick(player){
+       this.fireTimer = (this.fireTimer + 1) % 120; // 2秒周期（60fps仮定）
+       const weakPhase = this.fireTimer < 50; // 弱い
+       if (!weakPhase){
+         if (this.get(player.x, player.y)===TILE.FIRE && !player.flags.fireWard){
+           player.hp = Math.max(1, player.hp-1);
+         }
+       }
+     }
+   
+     /* 5F: hidden walls */
+     hiddenWallAt(x,y){
+       // 格子状に隠し壁（例）
+       return (x%6===0 && y>2 && y<this.h-2);
+     }
+   
+     /* 6F: guards stealth */
+     checkGuards(player){
+       this.guards.forEach(g=>{
+         g.x += g.dir * 0.05;
+         if (g.x<4 || g.x>this.w-5) g.dir*=-1;
+         const gx = Math.round(g.x), gy = g.y;
+         if (Math.abs(player.y - gy) <= 0 && ((g.dir>0 && player.x>gx && player.x<gx+5) || (g.dir<0 && player.x<gx && player.x>gx-5))){
+           if (!this._alerting){
+             this._alerting=true;
+             Dialog.show(["見張り：『侵入者！』","……振り出しだ。"]).then(()=>{
+               player.hp = Math.max(1, player.hp-2);
+               player.x = 2; player.y = 2;
+               this._alerting=false;
+             });
+           }
+         }
+       });
+     }
+   
+     /* 7F: falling tiles */
+     fallCheck(player){
+       const key = `${player.x},${player.y}`;
+       if (!this.fallSet.has(key)) {
+         this.fallSet.add(key);
+       }
+       if (this._lastKey && this._lastKey!==key){
+         const [lx,ly] = this._lastKey.split(",").map(Number);
+         if (this.get(lx,ly)===TILE.FLOOR) this.set(lx,ly,TILE.HOLE);
+       }
+       this._lastKey = key;
+     }
+   }
+   
+   /* ========= Enemies & Battle ========= */
+   const ENEMIES = {
+     slime:  { name: "スライム", hp: 8,  atk: 3, spd: 2, exp: 2 },
+     bat:    { name: "コウモリ", hp: 6,  atk: 2, spd: 4, exp: 3 },
+     knight: { name: "見習い騎士", hp: 14, atk: 4, spd: 3, exp: 5 },
+     dragon: { name: "古竜",     hp: 70, atk: 7, spd: 3, exp: 100 },
+   };
+   
+   class Scene { 
+     constructor(game){ this.game = game; } 
+     async start(){} 
+     update(dt){} 
+     draw(){} 
+   }
+   
+   class BattleScene extends Scene {
+     constructor(game, player, enemyId, returnLevel, returnPos){
+       super(game);
+       this.player = player;
+       this.enemyBase = ENEMIES[enemyId];
+       this.enemyId = enemyId;
+       this.enemy = { ...this.enemyBase };
+       this.returnLevel = returnLevel;
+       this.returnPos = returnPos;
+       this.turn = "player";
+       this._waiting = false;
+     }
+     async start(){
+       await Dialog.show(`${this.enemy.name} が現れた！`);
+     }
+     async command(){
+       const idx = await Dialog.choose("行動を選ぶ", ["攻撃","ガード","スキル"]);
+       if (idx===0) return this.attackPlayer();
+       if (idx===1) return this.guardPlayer();
+       if (idx===2) return this.skillPlayer();
+     }
+     update(){
+       if (this.turn==="player" && !this._waiting){
+         this._waiting=true;
+         this.command().then(()=>{ this._waiting=false; });
+       } else if (this.turn==="enemy" && !this._waiting){
+         this._waiting=true;
+         this.attackEnemy().then(()=>{ this._waiting=false; });
+       }
+       if (this.enemy.hp<=0){
+         Dialog.show([
+           `${this.enemy.name} を倒した！`,
+           `SPが1回復した。`
+         ]).then(()=> {
+           this.player.sp = Math.min(this.player.sp+1, 9);
+           this.game.change(new FloorScene(this.game, this.returnLevel, this.returnPos.x, this.returnPos.y, this.player));
+         });
+       }
+       if (this.player.hp<=0){
+         Dialog.show([
+           "……力尽きた。",
+           "再び1階からやり直しだ。"
+         ]).then(()=> {
+           this.game.change(new FloorScene(this.game, 0, 2, 2));
+         });
+       }
+     }
+     async attackPlayer(){
+       const dmg = Math.floor(Math.random()*3) + 2;
+       this.enemy.hp -= dmg;
+       await Dialog.show(`あなたの攻撃！ ${this.enemy.name} に ${dmg} ダメージ。`);
+       this.turn="enemy";
+     }
+     async guardPlayer(){
+       this._guard = true;
+       await Dialog.show("……身構えた。");
+       this.turn="enemy";
+     }
+     async skillPlayer(){
+       const skills = ["ブレイブスラスト(2SP)","アクアベール(2SP)","メディテイト(+SP)","やめる"];
+       const i = await Dialog.choose("スキル？", skills);
+       if (i===0 && this.player.sp>=2){
+         this.player.sp-=2;
+         const dmg = 6 + Math.floor(Math.random()*4);
+         this.enemy.hp -= dmg;
+         await Dialog.show(`ブレイブスラスト！ ${dmg} ダメージ。`);
+         this.turn="enemy";
+       } else if (i===1 && this.player.sp>=2){
+         this.player.sp-=2;
+         this.player.flags.fireWard = true;
+         await Dialog.show("アクアベール。炎への耐性を得た。");
+         this.turn="enemy";
+       } else if (i===2){
+         this.player.sp = Math.min(9, this.player.sp+2);
+         await Dialog.show("静かに息を整えた。SP+2。");
+         this.turn="enemy";
+       } else {
+         await Dialog.show("……やめた。");
+       }
+     }
+     async attackEnemy(){
+       let dmg = Math.floor(Math.random()*2) + this.enemyBase.atk;
+       if (this._guard){ dmg = Math.max(0, Math.floor(dmg/2)); this._guard=false; }
+       this.player.hp -= dmg;
+       await Dialog.show(`${this.enemy.name} の攻撃！ あなたは ${dmg} ダメージ。`);
+       this.turn="player";
+     }
+     draw(){
+       clearScreen("#1a1f2a");
+       drawTextCentered(`敵: ${this.enemy.name}`, canvas.width/2, 70, 20);
+       drawTextCentered(`HP: ${this.enemy.hp}`, canvas.width/2, 100, 18);
+       drawTextCentered(`あなた HP: ${this.player.hp}/${this.player.hpMax}`, canvas.width/2, 170, 18);
+       drawTextCentered(`SP: ${this.player.sp}`, canvas.width/2, 200, 18);
+       drawTextCentered(`行動は画面の選択肢で。`, canvas.width/2, 270, 14);
+     }
+   }
+   
+   /* ========= Dragon Boss ========= */
+   class DragonScene extends BattleScene {
+     constructor(game, player, returnLevel, returnPos){
+       super(game, player, "dragon", returnLevel, returnPos);
+       this.phase = 1; // 1:通常, 2:ブレス強化, 3:咆哮
+     }
+     async start(){
+       await Dialog.show([
+         "古竜：『また、塔の子か。』",
+         "古竜：『願いは、覚悟の重さで量る。』"
+       ]);
+     }
+     async attackEnemy(){
+       const hp = this.enemy.hp;
+       if (hp<=45 && this.phase===1){ this.phase=2; await Dialog.show("古竜は大きく息を吸い込んだ……"); }
+       if (hp<=20 && this.phase===2){ this.phase=3; await Dialog.show("古竜の眼が紅に灯る……"); }
+   
+       let text="", dmg=0;
+       if (this.phase===1){
+         dmg = this.enemyBase.atk + Math.floor(Math.random()*3);
+         text="前脚で薙ぎ払った！";
+       } else if (this.phase===2){
+         dmg = 8 + Math.floor(Math.random()*3);
+         if (this.player.flags.fireWard) dmg = Math.max(2, Math.floor(dmg/2));
+         text="灼熱のブレス！";
+       } else {
+         dmg = 5 + Math.floor(Math.random()*4);
+         text="咆哮が鼓膜を裂く！";
+         if (this._guard){ dmg = Math.max(1, Math.floor(dmg/2)); this._guard=false; }
+         this.player.hp -= dmg;
+         await Dialog.show(`古竜の${text} ${dmg} ダメージ。`);
+         if (this.player.hp>0){
+           const tail = 4 + Math.floor(Math.random()*3);
+           let tdmg = tail; if (this._guard){ tdmg=Math.max(1, Math.floor(tdmg/2)); this._guard=false; }
+           this.player.hp -= tdmg;
+           await Dialog.show(`尾の一撃！ さらに ${tdmg} ダメージ。`);
+           this.turn="player";
+           return;
+         } else {
+           this.turn="player"; return;
+         }
+       }
+   
+       if (this._guard){ dmg = Math.max(0, Math.floor(dmg/2)); this._guard=false; }
+       this.player.hp -= dmg;
+       await Dialog.show(`古竜の${text} あなたは ${dmg} ダメージ。`);
+       this.turn="player";
+     }
+     update(){
+       super.update();
+       if (this.enemy.hp<=0 && !this._ended){
+         this._ended=true;
+         this.afterWin();
+       }
+     }
+     async afterWin(){
+       await Dialog.show(["……古竜は静かに目を閉じた。","『では、願いを』"]);
+       const idx = await Dialog.choose("願いを選ぶ", ["力がほしい","世界の安寧","ひとりを救う"]);
+       if (idx===0) return this.endingPower();
+       if (idx===1) return this.endingPeace();
+       if (idx===2) return this.endingRevive();
+     }
+     async endingPower(){
+       await Dialog.show([
+         "『力は代償を伴う』",
+         "……全身に炎の紋が走る。HP上限+10、SP+2。",
+         "けれど、塔は消えない。"
+       ]);
+       this.player.hpMax += 10; this.player.hp = this.player.hpMax; this.player.sp += 2;
+       await Dialog.show("—— New Game+: 1Fから再挑戦（強化状態）");
+       this.game.change(new TitleScene(this.game));
+     }
+     async endingPeace(){
+       await Dialog.show([
+         "『安寧は、選び続ける意志』",
+         "……塔の風は止み、炎は鎮まる。世界から"塔の試練"が消えた。",
+         "あなたは静かな日々に戻る。"
+       ]);
+       this.game.change(new CreditsScene(this.game, "安寧エンド"));
+     }
+     async endingRevive(){
+       await Dialog.show([
+         "『その名を』",
+         "……あなたは名を告げた。失われた命が、朝露のように戻る。",
+         "代わりに、あなたの記憶から塔の記憶が一部消えた。"
+       ]);
+       this.player.hp = this.player.hpMax; this.player.sp = Math.max(0, this.player.sp-2);
+       this.game.change(new CreditsScene(this.game, "救済エンド"));
+     }
+   }
+   
+   /* ========= Scenes ========= */
+   class TitleScene extends Scene {
+     async start(){
+       await Dialog.show([
+         "『魔塔の覇者』",
+         "……天空へ伸びる魔塔。頂に辿り着いた者の願いは叶う。",
+         "7つの階。最上階に、竜。"
+       ]);
+     }
+     update(){ if (Input.act){ this.game.change(new FloorScene(this.game, 0)); } }
+     draw(){
+       const {width:w,height:h}=canvas;
+       clearScreen("#0c0f14");
+       drawTextCentered("魔塔の覇者", w/2, h/2 - 30, 28);
+       drawTextCentered("▶ はじめる（Enter/Space/Z）", w/2, h/2 + 10, 16);
+     }
+   }
+   
+   class FloorScene extends Scene {
+     constructor(game, level, px=2, py=2, playerObj=null){
+       super(game);
+       this.map = new MapData(level);
+       this.player = playerObj ?? new Player(this.map);
+       this.player.map = this.map;
+       this.player.x = px; this.player.y = py;
+       this.camX=0; this.camY=0;
+       this.map.game = game;
+     }
+     async start(){
+       const names = [
+         "1F：試練の庭園","2F：風の回廊","3F：氷結の間","4F：炎の大広間",
+         "5F：幻影の回廊","6F：王の間","7F：竜の天守"
+       ];
+       HUD.floor.textContent = names[this.map.level] ?? `${this.map.level+1}F`;
+       const intro = {
+         0:["……ここが始まり。基礎を学べ。"],
+         1:["風が渦巻いている……注意して進め。"],
+         2:["……足元が凍っている。滑りそうだ。"],
+         3:["炎の息が、壁の向こうから。"],
+         4:["ここは偽物が本物の顔をする場所。"],
+         5:["王に会う前に、礼儀として"見つからない"こと。"],
+         6:["……静かに。息まで熱い。"]
+       };
+       if (intro[this.map.level]) await Dialog.show(intro[this.map.level]);
+     }
+     update(dt){
+       this.player.update(dt);
+       HUD.coords.textContent = `(${this.player.x},${this.player.y})`;
+       HUD.hp.textContent = `HP ${this.player.hp}/${this.player.hpMax}`;
+       HUD.sp.textContent = `SP ${this.player.sp}`;
+   
+       this.camX = clamp(this.player.x - VIEW_W/2, 0, this.map.w - VIEW_W);
+       this.camY = clamp(this.player.y - VIEW_H/2, 0, this.map.h - VIEW_H);
+   
+       const d = this.map.consumeFloorChange();
+       if (d !== 0){
+         const next = clamp(this.map.level + d, 0, 6);
+         if (next !== this.map.level){
+           this.game.change(new FloorScene(this.game, next, 2, 2, this.player));
+         } else if (next===6 && d>0){
+           this.game.change(new DragonScene(this.game, this.player, this.map.level, {x:this.player.x,y:player.y}));
+         }
+       }
+     }
+     draw(){
+       clearScreen("#111318");
+       const sx = Math.floor(this.camX);
+       const sy = Math.floor(this.camY);
+       const vw = Math.ceil(VIEW_W)+1;
+       const vh = Math.ceil(VIEW_H)+1;
+       for (let y=0; y<vh; y++){
+         for (let x=0; x<vw; x++){
+           const mx = sx + x;
+           const my = sy + y;
+           let id = this.map.get(mx,my);
+   
+           // 5F 幻影：未可視なら壁を床に見せる
+           if (this.map.level===4 && !this.map.revealed && this.map.hiddenWallAt && this.map.hiddenWallAt(mx,my)){
+             drawTile(x, y, COLORS[TILE.FLOOR]);
+             continue;
+           }
+   
+           drawTile(x, y, COLORS[id] ?? "#222");
+         }
+       }
+   
+       // 6F ガード表示＋視界
+       if (this.map.level===5){
+         this.map.guards.forEach(g=>{
+           const gx = Math.round(g.x);
+           const gy = g.y;
+           const sxpx = (gx - sx)*TILE_SIZE*SCALE;
+           const sypx = (gy - sy)*TILE_SIZE*SCALE;
+           drawRect(sxpx, sypx, TILE_SIZE*SCALE, TILE_SIZE*SCALE, "#4b5563");
+           for (let i=1;i<=4;i++){
+             const cx = gx + (g.dir>0? i : -i);
+             const px = (cx - sx)*TILE_SIZE*SCALE;
+             drawRect(px, sypx+6, TILE_SIZE*SCALE, 4, "rgba(255,215,0,0.25)");
+           }
+         });
+       }
+   
+       // プレイヤー
+       drawRect((this.player.x - sx)*TILE_SIZE*SCALE, (this.player.y - sy)*TILE_SIZE*SCALE, TILE_SIZE*SCALE, TILE_SIZE*SCALE, "#e8ecf1");
+     }
+   }
+   
+   class CreditsScene extends Scene {
+     constructor(game, title){ super(game); this.title=title; }
+     async start(){
+       await Dialog.show([
+         `—— ${this.title} ——`,
+         "スタッフロール（簡略）",
+         "プレイありがとうございました。"
+       ]);
+     }
+     update(){ if (Input.act){ this.game.change(new TitleScene(this.game)); } }
+     draw(){
+       clearScreen("#0c0f14");
+       drawTextCentered(this.title, canvas.width/2, canvas.height/2 - 10, 22);
+       drawTextCentered("Enterでタイトルへ", canvas.width/2, canvas.height/2 + 30, 14);
+     }
+   }
+   
+   /* ========= Game Core ========= */
+   class Game {
+     constructor(){
+       this.scene = new TitleScene(this);
+       this.last = performance.now();
+       this.scene.start().catch(console.error);
+       requestAnimationFrame(this.loop.bind(this));
+     }
+     change(scene){
+       this.scene = scene;
+       this.scene.start().catch(console.error);
+     }
+     loop(t){
+       const dt = t - this.last; this.last = t;
+       this.scene.update(dt);
+       this.scene.draw();
+       requestAnimationFrame(this.loop.bind(this));
+     }
+   }
+   
+   /* ========= Boot ========= */
+   new Game();
+   
+   /* ======= 備考 =======
+   - 会話文は Dialog.show()/choose() 内に記述。
+   - シナリオ増強は JSON 外出しにしても良い。
+   ====================== */
+  </script>
 </body>
 </html>
