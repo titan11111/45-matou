@@ -1,0 +1,36 @@
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; background:#0c0f14; color:#e8ecf1; font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif; }
+#game-root { display:flex; align-items:center; justify-content:center; height:100%; position:relative; }
+
+canvas#game { width:min(96vw, 1024px); height:auto; image-rendering: pixelated; background:#111318; border:1px solid #2a2f39; border-radius:8px; }
+
+#hud { position:absolute; top:8px; left:50%; transform:translateX(-50%); width:calc(min(96vw, 1024px) - 24px); display:flex; justify-content:space-between; gap:8px; padding:6px 10px; background:rgba(9,12,17,.65); backdrop-filter: blur(4px); border:1px solid #1f2530; border-radius:8px; font-size:14px; }
+#hud span { margin-right:10px; opacity:.95; }
+
+#dialog { position:absolute; bottom:16px; left:50%; transform:translateX(-50%); width:calc(min(96vw, 1024px) - 24px); min-height:92px; padding:12px 14px; background:rgba(9,12,17,.85); border:1px solid #2a2f39; border-radius:8px; display:flex; flex-direction:column; gap:10px; }
+#dialog.hidden { display:none; }
+#dialog-text { white-space:pre-wrap; line-height:1.5; }
+#dialog-next { align-self:flex-end; min-width:52px; height:40px; }
+
+.btn { background:#2b6cb0; border:0; color:#fff; padding:8px 12px; border-radius:6px; cursor:pointer; }
+.btn:active { transform: translateY(1px); }
+
+.touch-only { position:absolute; right:10px; bottom:10px; display:none; gap:8px; }
+.dpad { width:56px; height:56px; background:#1b212c; border:1px solid #2a2f39; border-radius:8px; }
+.dpad:active, .act:active { transform: translateY(1px); }
+.row { display:flex; gap:8px; }
+
+@media (max-width: 900px) {
+  .touch-only { display:flex; flex-direction:column; }
+}
+
+#coords { opacity:.6; }
+
+/* 選択肢 */
+.choices { display:flex; gap:8px; flex-wrap:wrap; }
+.choices.hidden { display:none; }
+.choices .choice {
+  background:#263044; border:1px solid #2f3a50; color:#e8ecf1;
+  padding:6px 10px; border-radius:6px; cursor:pointer;
+}
+.choices .choice:active { transform: translateY(1px); }
