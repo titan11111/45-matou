@@ -85,13 +85,22 @@
    addEventListener("keyup",   (e)=>{ const k = KEYS[e.code]; if (k){ Input[k]=false; e.preventDefault(); }});
    
    // touch
-   $("#touchpad")?.addEventListener("click", (e)=>{
-     const dir = e.target.dataset.dir;
-     if (dir) { Input[dir]=true; setTimeout(()=> Input[dir]=false, 80); }
-   });
-   $("#btn-act")?.addEventListener("click", ()=>{
-     Input.act=true; setTimeout(()=> Input.act=false, 120);
-   });
+  const touchpad = $("#touchpad");
+  if (touchpad) {
+    touchpad.addEventListener("pointerdown", (e) => {
+      const dir = e.target.dataset.dir;
+      if (dir) {
+        Input[dir] = true;
+        setTimeout(() => (Input[dir] = false), 80);
+        e.preventDefault();
+      }
+    });
+  }
+  $("#btn-act")?.addEventListener("pointerdown", (e)=>{
+    Input.act = true;
+    setTimeout(() => (Input.act = false), 120);
+    e.preventDefault();
+  });
    
    /* ========= Helpers ========= */
    const clamp = (v, min, max)=> Math.max(min, Math.min(max, v));

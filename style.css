@@ -16,12 +16,13 @@ canvas#game { width:min(96vw, 1024px); height:auto; image-rendering: pixelated; 
 .btn:active { transform: translateY(1px); }
 
 .touch-only { position:absolute; right:10px; bottom:10px; display:none; gap:8px; }
-.dpad { width:56px; height:56px; background:#1b212c; border:1px solid #2a2f39; border-radius:8px; }
+.dpad { width:56px; height:56px; background:#1b212c; border:1px solid #2a2f39; border-radius:8px; cursor:pointer; color:#e8ecf1; }
+.dpad, .act { user-select:none; -webkit-user-select:none; touch-action:manipulation; }
 .dpad:active, .act:active { transform: translateY(1px); }
 .row { display:flex; gap:8px; }
 
 @media (max-width: 900px) {
-  .touch-only { display:flex; flex-direction:column; }
+  .touch-only { display:flex; flex-direction:column; align-items:center; }
 }
 
 #coords { opacity:.6; }
