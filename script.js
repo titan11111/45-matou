@@ -145,16 +145,28 @@
      return g;
    }
    
-   /* 7階ベースマップ */
-   const BASE_MAPS = [
-     /* 1F 試練の庭園 */ gridBox(24, 13, { stairUp:[22,11], events:[[4,4],[8,8]] }),
-     /* 2F 風の回廊   */ gridBox(26, 14, { stairUp:[23,11], stairDown:[2,2], events:[[13,7]], switches:[[6,7],[19,7]] }),
-     /* 3F 氷結の間   */ gridBox(28, 15, { stairUp:[25,12], stairDown:[2,2], events:[[7,7],[20,8]] }),
-     /* 4F 炎の大広間 */ gridBox(28, 15, { stairUp:[25,12], stairDown:[2,2], fires:[[10,6],[11,6],[12,6],[16,8],[17,8]], events:[[14,5]] }),
-     /* 5F 幻影の回廊 */ gridBox(30, 16, { stairUp:[27,13], stairDown:[2,2], events:[[9,4],[20,10]] }),
-     /* 6F 王の間     */ gridBox(30, 16, { stairUp:[27,13], stairDown:[2,2], events:[[15,8]] }),
-     /* 7F 竜の天守   */ gridBox(32, 17, { stairDown:[2,2], events:[[16,8]] }),
-   ];
+  /* ベースマップ（40階対応） */
+  const BASE_MAPS = [
+    /* 1F 試練の庭園 */ gridBox(24, 13, { stairUp:[22,11], events:[[4,4],[8,8]] }),
+    /* 2F 風の回廊   */ gridBox(26, 14, { stairUp:[23,11], stairDown:[2,2], events:[[13,7]], switches:[[6,7],[19,7]] }),
+    /* 3F 氷結の間   */ gridBox(28, 15, { stairUp:[25,12], stairDown:[2,2], events:[[7,7],[20,8]] }),
+    /* 4F 炎の大広間 */ gridBox(28, 15, { stairUp:[25,12], stairDown:[2,2], fires:[[10,6],[11,6],[12,6],[16,8],[17,8]], events:[[14,5]] }),
+    /* 5F 幻影の回廊 */ gridBox(30, 16, { stairUp:[27,13], stairDown:[2,2], events:[[9,4],[20,10]] }),
+    /* 6F 王の間     */ gridBox(30, 16, { stairUp:[27,13], stairDown:[2,2], events:[[15,8]] }),
+    /* 7F 竜の天守   */ gridBox(32, 17, { stairDown:[2,2], events:[[16,8]] }),
+    /* 8F-40F 汎用   */ ...Array.from({length:33}, () => gridBox(24, 13, { stairUp:[22,11], stairDown:[1,1] }))
+  ];
+
+  /* 会話パターン（男/ねこ/じいさん/ギャル/子供/仙人/犬） */
+  const COMMENT_PATTERNS = Array.from({ length: 50 }, (_, i) => [
+    `男「${i + 1}階、まだまだ行けるな」`,
+    `ねこ「にゃー、${i + 1}回目のあいさつだよ」`,
+    `じいさん「ふぉっふぉ、${i + 1}度目の挑戦じゃ」`,
+    `ギャル「${i + 1}階とかマジやばくない？」`,
+    `子供「${i + 1}回も登ったよ！」`,
+    `仙人「静かに、${i + 1}の気が満ちておる」`,
+    `犬「わん！${i + 1}回目だワン！」`
+  ]);
    
    /* ========= Player ========= */
    class Player {
@@ -635,7 +647,8 @@
          6:["……静かに。息まで熱い。"]
        };
        if (intro[this.map.level]) await Dialog.show(intro[this.map.level]);
-     }
+       await Dialog.show(COMMENT_PATTERNS[this.map.level % COMMENT_PATTERNS.length]);
+    }
      update(dt){
        this.player.update(dt);
        HUD.coords.textContent = `(${this.player.x},${this.player.y})`;
@@ -647,11 +660,9 @@
    
        const d = this.map.consumeFloorChange();
        if (d !== 0){
-         const next = clamp(this.map.level + d, 0, 6);
+         const next = clamp(this.map.level + d, 0, 39);
          if (next !== this.map.level){
            this.game.change(new FloorScene(this.game, next, 2, 2, this.player));
-         } else if (next===6 && d>0){
-           this.game.change(new DragonScene(this.game, this.player, this.map.level, {x:this.player.x,y:this.player.y}));
          }
        }
      }
